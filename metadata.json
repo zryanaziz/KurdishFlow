@@ -1,0 +1,8 @@
+{
+  "name": "Zryan",
+  "description": "A professional Kurdish Sorani translation tool with AI-powered refinement and summarization.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
