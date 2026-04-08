@@ -356,6 +356,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f5f5f5] text-[#1a1a1a] font-sans selection:bg-[#1a1a1a] selection:text-white">
+      {/* Contact Info */}
+      <div className="bg-black/5 px-6 py-2 text-center text-[10px] text-black/50 font-mono flex items-center justify-center gap-2">
+        <span>Contact:</span>
+        <input 
+          type="text" 
+          readOnly 
+          value="zryanaziz@gmail.com" 
+          className="bg-transparent border-none outline-none font-mono text-center w-40 cursor-pointer hover:text-black transition-colors"
+          onClick={(e) => {
+            e.currentTarget.select();
+            navigator.clipboard.writeText(e.currentTarget.value);
+          }}
+          title="Click to copy"
+        />
+      </div>
+
       {/* Header */}
       <header className="border-b border-black/5 bg-white/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-6 py-4 flex justify-between items-center">
