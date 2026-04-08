@@ -362,7 +362,7 @@ export default function App() {
         <input 
           type="text" 
           readOnly 
-          value="zryanaziz@gmail.com" 
+          value="AIzaSyDWdTW6XoUThbtbE2RTZtgAGkwHLMr0WjU" 
           className="bg-transparent border-none outline-none font-mono text-center w-40 cursor-pointer hover:text-black transition-colors"
           onClick={(e) => {
             e.currentTarget.select();
