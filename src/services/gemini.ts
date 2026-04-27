@@ -3,7 +3,12 @@ import { GoogleGenAI } from "@google/genai";
 const getAi = () => {
   // Check for manual key in localStorage first, then environment variables
   const manualKey = typeof window !== 'undefined' ? localStorage.getItem('manual_gemini_key') : null;
-  const key = manualKey || process.env.GEMINI_API_KEY || (process.env as any).API_KEY;
+  
+  // Safely access process.env
+  const env = typeof process !== 'undefined' ? process.env : {};
+  const envKey = (env as any).GEMINI_API_KEY || (env as any).API_KEY;
+  
+  const key = manualKey || envKey;
   
   if (!key) {
     throw new Error("API Key is missing. Please use the 'Manual Key' button or the Settings menu.");
@@ -19,6 +24,13 @@ export const getManualApiKey = () => {
   return localStorage.getItem('manual_gemini_key') || "";
 };
 
+export enum Language {
+  SORANI = "Kurdish Sorani",
+  ENGLISH = "English",
+  ARABIC = "Arabic",
+  MIXED = "Mixed Religious",
+}
+
 export enum TranslationMode {
   TRANSLATE = "translate",
   REFINE = "refine",
@@ -32,21 +44,34 @@ export interface TranslationResult {
   summary?: string;
   timestamp: number;
   mode: TranslationMode;
+  targetLanguage: Language;
 }
 
-const SYSTEM_INSTRUCTIONS = `You are a professional translator and linguist specializing in Kurdish Sorani. 
-Your goal is to provide high-quality, natural, and context-aware translations from any language into Kurdish Sorani.
-Kurdish Sorani uses a modified Arabic script and is written from right to left (RTL).
+const getSystemInstructions = (targetLanguage: Language) => {
+  if (targetLanguage === Language.MIXED) {
+    return `You are a professional translator and linguist tasked with translating religious speeches (e.g., from an Imam). 
+    For normal speech, translate into English. 
+    For Ayats (Quranic verses) and Hadiths, ALWAYS maintain the EXASt Arabic text. 
+    DO NOT translate Arabic religious quotes into English. 
+    You MUST verify the accuracy of the Arabic Ayats/Hadiths and ensure there are no missing words.
+    
+    Structure: Maintain the structural flow of the speech.
+    Formatting: CRITICAL: You MUST preserve the exact formatting, spacing, and line breaks of the original text.`;
+  }
+  return `You are a professional translator and linguist specializing in ${targetLanguage}. 
+Your goal is to provide high-quality, natural, and context-aware translations from any language into ${targetLanguage}.
+${targetLanguage === Language.SORANI ? "Kurdish Sorani uses a modified Arabic script and is written from right to left (RTL)." : ""}
 Always ensure the output is grammatically correct and culturally appropriate.
 
-CRITICAL: You MUST preserve the exact formatting, spacing, and line breaks of the original text. If the input has multiple paragraphs or specific indentation, the Kurdish Sorani output must mirror that structure exactly.
+CRITICAL: You MUST preserve the exact formatting, spacing, and line breaks of the original text. If the input has multiple paragraphs or specific indentation, the ${targetLanguage} output must mirror that structure exactly.
 
 Follow these rules for the output:
 1. If asked to translate, provide only the translation, preserving all original line breaks and spacing.
-2. If asked to refine, provide only the refined, natural-sounding Kurdish Sorani version, preserving all original line breaks and spacing.
-3. If asked to summarize, provide only the concise summary in Kurdish Sorani.
+2. If asked to refine, provide only the refined, natural-sounding ${targetLanguage} version, preserving all original line breaks and spacing.
+3. If asked to summarize, provide only the concise summary in ${targetLanguage}.
 
 Do not include any labels like 'Initial Translation:' or 'Summary:' in your response. Just the text itself.`;
+};
 
 export async function generateSoraniSpeech(text: string): Promise<string> {
   if (!navigator.onLine) {
@@ -55,7 +80,7 @@ export async function generateSoraniSpeech(text: string): Promise<string> {
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
+      model: "gemini-2.0-flash",
       contents: [{ parts: [{ text: `Read this Kurdish Sorani text clearly: ${text}` }] }],
       config: {
         responseModalities: ["AUDIO"],
@@ -89,7 +114,7 @@ export async function performOCR(
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: [
         {
           inlineData: {
@@ -120,7 +145,7 @@ export async function transcribeAudio(
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: [
         {
           inlineData: {
@@ -141,33 +166,55 @@ export async function transcribeAudio(
   }
 }
 
+export async function detectReligiousContent(text: string): Promise<boolean> {
+  try {
+    const response = await getAi().models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: `Analyze the following text. Does it contain religious content like Quranic verses (Ayats) or Hadiths? Answer ONLY with "yes" or "no":\n\n${text}`
+    });
+    return response.text?.trim().toLowerCase() === "yes";
+  } catch (err) {
+    return false;
+  }
+}
+
 export async function translateText(
   text: string,
+  targetLanguage: Language = Language.SORANI,
   mode: TranslationMode = TranslationMode.TRANSLATE
 ): Promise<TranslationResult> {
   if (!navigator.onLine) {
     throw new Error("You are currently offline. New translations require an internet connection.");
   }
 
+  const isReligious = await detectReligiousContent(text);
+  const finalLanguage = isReligious ? Language.MIXED : targetLanguage;
+
   let prompt = "";
   switch (mode) {
     case TranslationMode.TRANSLATE:
-      prompt = `Translate the following text into natural Kurdish Sorani:\n\n${text}`;
+      prompt = finalLanguage === Language.MIXED 
+        ? `Translate the following religious speech into English, but KEEP all Arabic Ayats and Hadiths in Arabic without translating them. Ensure the Arabic is authentic and complete:\n\n${text}`
+        : `Translate the following text into natural ${finalLanguage}:\n\n${text}`;
       break;
     case TranslationMode.REFINE:
-      prompt = `Translate the following text into Kurdish Sorani and then refine it to sound more natural, professional, and idiomatic for a native speaker. Provide ONLY the refined Kurdish Sorani version.\n\n${text}`;
+      prompt = finalLanguage === Language.MIXED
+        ? `Refine the following religious speech for flow and clarity. Keep Arabic Ayats/Hadiths in Arabic:\n\n${text}`
+        : `Translate the following text into ${finalLanguage} and then refine it to sound more natural, professional, and idiomatic for a native speaker. Provide ONLY the refined ${finalLanguage} version.\n\n${text}`;
       break;
     case TranslationMode.SUMMARIZE:
-      prompt = `Translate the following text into Kurdish Sorani, refine it for natural flow, and then provide a concise summary in Kurdish Sorani. Provide ONLY the summary in Kurdish Sorani.\n\n${text}`;
+      prompt = finalLanguage === Language.MIXED
+        ? `Summarize the following religious speech, keeping key Arabic Ayats/Hadiths as is:\n\n${text}`
+        : `Translate the following text into ${finalLanguage}, refine it for natural flow, and then provide a concise summary in ${finalLanguage}. Provide ONLY the summary in ${finalLanguage}.\n\n${text}`;
       break;
   }
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTIONS,
+        systemInstruction: getSystemInstructions(finalLanguage),
       },
     });
 
@@ -178,6 +225,7 @@ export async function translateText(
       translated: resultText.trim(),
       timestamp: Date.now(),
       mode,
+      targetLanguage: finalLanguage,
     };
 
     // Save to history

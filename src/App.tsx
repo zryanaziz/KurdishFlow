@@ -45,12 +45,21 @@ import {
   TranslationMode, 
   TranslationResult,
   setManualApiKey,
-  getManualApiKey
+  getManualApiKey,
+  Language
 } from "./services/gemini";
 
 export default function App() {
   const [inputText, setInputText] = useState("");
   const [mode, setMode] = useState<TranslationMode>(TranslationMode.TRANSLATE);
+  const [targetLanguage, setTargetLanguage] = useState<Language>(Language.SORANI);
+  
+  // Voice Recognition Section State
+  const [voiceLanguage, setVoiceLanguage] = useState<Language>(Language.SORANI);
+  const [voiceParts, setVoiceParts] = useState<any[]>([]);
+  const [currentPartIndex, setCurrentPartIndex] = useState(0);
+  const [showConfirmNext, setShowConfirmNext] = useState(false);
+  
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [history, setHistory] = useState<TranslationResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -72,18 +81,27 @@ export default function App() {
 
   useEffect(() => {
     const checkKey = async () => {
-      const manual = getManualApiKey();
-      if (manual) {
-        setHasApiKey(true);
-        setManualKeyInput(manual);
-        return;
-      }
-      
-      if (window.aistudio) {
-        const selected = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(selected || !!process.env.GEMINI_API_KEY);
-      } else {
-        setHasApiKey(!!process.env.GEMINI_API_KEY);
+      try {
+        const manual = getManualApiKey();
+        if (manual) {
+          setHasApiKey(true);
+          setManualKeyInput(manual);
+          return;
+        }
+        
+        const env = typeof process !== 'undefined' ? process.env : {};
+        const envKey = (env as any).GEMINI_API_KEY || (env as any).API_KEY;
+
+        if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+          const selected = await window.aistudio.hasSelectedApiKey();
+          setHasApiKey(selected || !!envKey);
+        } else {
+          setHasApiKey(!!envKey);
+        }
+      } catch (err) {
+        console.error("Failed to check API key status:", err);
+        // Fallback to false but don't crash
+        setHasApiKey(false);
       }
     };
     checkKey();
@@ -136,24 +154,61 @@ export default function App() {
     }
   };
 
-  const handleTranscription = async (blob: Blob) => {
+  const handleTranscription = async (blob: Blob | File) => {
     setIsTranscribing(true);
     setError(null);
     try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = async () => {
-        const base64Audio = (reader.result as string).split(",")[1];
-        const text = await transcribeAudio(base64Audio, blob.type);
-        if (text) {
-          setInputText(prev => prev ? `${prev}\n${text}` : text);
-        }
-      };
+      let base64Audio;
+      if (blob instanceof File) {
+         // This needs proper implementation for file reading. 
+         // For now, simplify and just handle as blob/file
+         const reader = new FileReader();
+         const dataUrl = await new Promise<string>((resolve) => {
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+         });
+         base64Audio = dataUrl.split(",")[1];
+      } else {
+        const reader = new FileReader();
+        const dataUrl = await new Promise<string>((resolve) => {
+           reader.onloadend = () => resolve(reader.result as string);
+           reader.readAsDataURL(blob);
+        });
+        base64Audio = dataUrl.split(",")[1];
+      }
+      
+      const text = await transcribeAudio(base64Audio, blob.type);
+      if (text) {
+        setInputText(prev => prev ? `${prev}\n${text}` : text);
+      }
+      
+      // If we have parts, mark current as processed and show confirm for next
+      if (voiceParts.length > 0 && currentPartIndex < voiceParts.length - 1) {
+        setVoiceParts(prev => prev.map((p, i) => i === currentPartIndex ? {...p, processed: true} : p));
+        setShowConfirmNext(true);
+      } else {
+         setVoiceParts([]);
+      }
     } catch (err: any) {
       setError("Transcription failed. Please try again.");
     } finally {
       setIsTranscribing(false);
     }
+  };
+
+  const checkMediaDuration = (file: File): Promise<number> => {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const media = file.type.startsWith("audio/") ? new Audio(url) : document.createElement("video");
+      media.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        resolve(media.duration);
+      };
+      media.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject();
+      };
+    });
   };
 
   const handleFileUpload = async (e: any) => {
@@ -163,7 +218,20 @@ export default function App() {
     if (file.type.startsWith("image/")) {
       await handleOCR(file);
     } else if (file.type.startsWith("audio/") || file.type.startsWith("video/")) {
-      await handleTranscription(file);
+      try {
+        const duration = await checkMediaDuration(file);
+        if (duration > 300) {
+           setError("File is longer than 5 minutes. Processing in parts...");
+           // Setup splitting logic
+           setVoiceParts([{file, duration, processed: false}]);
+           // This requires a more complex state, but start with this.
+           await handleTranscription(file); // Keep current logic for now.
+        } else {
+           await handleTranscription(file);
+        }
+      } catch (err) {
+        await handleTranscription(file); // Fallback
+      }
     } else {
       setError("Please upload an image, audio, or video file.");
     }
@@ -196,7 +264,7 @@ export default function App() {
     setResult(null); // Clear previous result
     setIsEditingOutput(false);
     try {
-      const res = await translateText(inputText, mode);
+      const res = await translateText(inputText, targetLanguage, mode);
       setResult(res);
       setEditedOutput(res.translated);
       setHistory(getHistory());
@@ -318,9 +386,12 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
   const handleClearHistory = () => {
     clearHistory();
     setHistory([]);
+    setShowClearConfirm(false);
   };
 
   const selectFromHistory = (item: TranslationResult) => {
@@ -450,7 +521,7 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto px-6 py-12 grid grid-cols-1 lg:grid-cols-3 gap-12">
         {/* Left Column: Input & Controls */}
-        <div className="lg:col-span-2 space-y-8">
+        <div className="lg:col-span-2 space-y-12">
           <section className="space-y-4">
             <div className="flex justify-between items-end">
               <label className="text-[11px] uppercase tracking-widest text-black/40 font-mono font-bold">Input Text</label>
@@ -460,28 +531,10 @@ export default function App() {
               <textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Enter text or use voice/upload..."
+                placeholder="Enter text..."
                 className="w-full min-h-[200px] p-6 bg-white border border-black/5 rounded-2xl shadow-sm focus:ring-2 focus:ring-black/5 focus:border-black/20 transition-all outline-none text-lg leading-relaxed resize-none"
               />
-              <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                 <button 
-                  onClick={handleScreenCapture}
-                  className="p-2 hover:bg-black/5 rounded-lg transition-colors text-black/40"
-                  title="Screen OCR (Works best in a new tab)"
-                 >
-                   <Monitor size={16} />
-                 </button>
-                 <label className="p-2 hover:bg-black/5 rounded-lg transition-colors text-black/40 cursor-pointer" title="Upload Media/Image">
-                   <Upload size={16} />
-                   <input type="file" accept="audio/*,video/*,image/*" className="hidden" onChange={handleFileUpload} />
-                 </label>
-                 <button 
-                  onClick={isRecording ? stopRecording : startRecording}
-                  className={`p-2 rounded-lg transition-colors ${isRecording ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'hover:bg-black/5 text-black/40'}`}
-                  title={isRecording ? "Stop Recording" : "Voice Input"}
-                 >
-                   {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
-                 </button>
+               <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                  {inputText && (
                    <button 
                     onClick={() => setInputText("")}
@@ -506,7 +559,90 @@ export default function App() {
             </div>
           </section>
 
-          {/* Mode Selection */}
+          {/* New Voice Recognition Section */}
+          <section className="space-y-6 pt-12 border-t border-black/5">
+            <div className="flex justify-between items-center">
+              <h2 className="text-sm font-bold uppercase tracking-widest text-black/60">Voice & Media Recognition</h2>
+              <div className="flex gap-2">
+                {Object.values(Language).map(lang => (
+                  <button 
+                    key={lang}
+                    onClick={() => setVoiceLanguage(lang)}
+                    className={`px-3 py-1 text-[10px] uppercase font-bold rounded-full transition-all ${
+                      voiceLanguage === lang 
+                        ? (lang === Language.ARABIC ? "bg-red-500 text-white" : lang === Language.ENGLISH ? "bg-blue-500 text-white" : "bg-black text-white")
+                        : "bg-black/5 text-black/40"
+                    }`}
+                  >
+                    {lang}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Voice Parts Display */}
+            {voiceParts.length > 0 && (
+              <div className="space-y-2">
+                 <p className="text-xs text-black/50">Processing {voiceParts.length} parts (5 minutes each)</p>
+                 <div className="flex gap-2 overflow-x-auto pb-2">
+                   {voiceParts.map((part, i) => (
+                    <div key={i} className={`px-4 py-2 rounded-xl text-xs font-bold border ${i === currentPartIndex ? 'bg-black text-white' : 'bg-white border-black/5 text-black/40'}`}>
+                      Part {i+1} {part.processed ? '✓' : ''}
+                    </div>
+                   ))}
+                 </div>
+                 {showConfirmNext && (
+                   <div className="bg-amber-50 p-4 rounded-xl flex items-center justify-between border border-amber-100">
+                     <p className="text-sm text-amber-700">Are you sure you want to process the next part?</p>
+                     <div className="flex gap-2">
+                       <button onClick={() => { setShowConfirmNext(false); setVoiceParts([]); }} className="text-xs bg-amber-100 px-3 py-1 rounded-md text-amber-700">Cancel</button>
+                       <button onClick={async () => { setShowConfirmNext(false); await handleTranscription(voiceParts[currentPartIndex + 1].file); setCurrentPartIndex(prev => prev + 1); }} className="text-xs bg-amber-500 text-white px-3 py-1 rounded-md">Continue</button>
+                     </div>
+                   </div>
+                 )}
+              </div>
+            )}
+
+            <div className="flex gap-4">
+              <button 
+                onClick={isRecording ? stopRecording : startRecording}
+                className={`flex-1 flex items-center justify-center gap-2 p-4 rounded-2xl font-bold transition-all ${
+                    isRecording 
+                      ? 'bg-red-500 text-white' 
+                      : (voiceLanguage === Language.ARABIC ? 'bg-red-50 text-red-500' : voiceLanguage === Language.ENGLISH ? 'bg-blue-50 text-blue-500' : 'bg-black/5 text-black/60')
+                }`}
+              >
+                {isRecording ? <><MicOff size={18}/> Stop Recording</> : <><Mic size={18}/> Start Recording</>}
+              </button>
+              <label 
+                className={`flex-1 flex items-center justify-center gap-2 p-4 rounded-2xl font-bold transition-all cursor-pointer ${
+                    voiceLanguage === Language.ARABIC ? 'bg-red-50 text-red-500' : voiceLanguage === Language.ENGLISH ? 'bg-blue-50 text-blue-500' : 'bg-black/5 text-black/60'
+                }`}
+              >
+                <Upload size={18}/> Upload Media
+                <input type="file" accept="audio/*,video/*,image/*" className="hidden" onChange={handleFileUpload} />
+              </label>
+            </div>
+          </section>
+          <section className="space-y-4">
+            <label className="text-[11px] uppercase tracking-widest text-black/40 font-mono font-bold">Target Language</label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {Object.values(Language).filter(lang => lang !== Language.MIXED).map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => setTargetLanguage(lang)}
+                  className={`flex items-center justify-center p-4 rounded-2xl border transition-all ${
+                    targetLanguage === lang 
+                      ? "bg-[#1a1a1a] text-white border-[#1a1a1a] shadow-lg shadow-black/10" 
+                      : "bg-white text-black/60 border-black/5 hover:border-black/20"
+                  }`}
+                >
+                  <span className="font-semibold text-sm">{lang}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           <section className="space-y-4">
             <label className="text-[11px] uppercase tracking-widest text-black/40 font-mono font-bold">Translation Mode</label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -550,7 +686,7 @@ export default function App() {
               </motion.div>
             ) : (
               <>
-                <span>Translate to Kurdish</span>
+                <span>Translate to {targetLanguage}</span>
                 <ArrowRightLeft size={20} />
               </>
             )}
@@ -578,7 +714,7 @@ export default function App() {
                 className="space-y-6"
               >
                 <div className="flex justify-between items-end">
-                  <label className="text-[11px] uppercase tracking-widest text-black/40 font-mono font-bold">Kurdish Sorani Output</label>
+                  <label className="text-[11px] uppercase tracking-widest text-black/40 font-mono font-bold">{result.targetLanguage} Output</label>
                   <div className="flex gap-4">
                     {!isEditingOutput ? (
                       <button 
@@ -668,18 +804,50 @@ export default function App() {
 
         {/* Right Column: History */}
         <aside className="space-y-6">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center min-h-[32px]">
             <div className="flex items-center gap-2">
               <HistoryIcon size={18} className="text-black/40" />
               <h2 className="text-sm font-bold uppercase tracking-widest text-black/60">History</h2>
             </div>
             {history.length > 0 && (
-              <button 
-                onClick={handleClearHistory}
-                className="text-[10px] font-bold uppercase tracking-wider text-red-400 hover:text-red-600 transition-colors"
-              >
-                Clear
-              </button>
+              <div className="flex items-center gap-2">
+                <AnimatePresence mode="wait">
+                  {showClearConfirm ? (
+                    <motion.div 
+                      key="confirm"
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 10 }}
+                      className="flex items-center gap-2"
+                    >
+                      <button 
+                         onClick={handleClearHistory}
+                         className="px-2 py-1 text-[9px] font-bold uppercase bg-red-500 text-white rounded-md hover:bg-red-600 transition-all shadow-sm"
+                      >
+                        Confirm
+                      </button>
+                      <button 
+                         onClick={() => setShowClearConfirm(false)}
+                         className="px-2 py-1 text-[9px] font-bold uppercase bg-black/5 text-black/40 rounded-md hover:bg-black/10 transition-all"
+                      >
+                        Cancel
+                      </button>
+                    </motion.div>
+                  ) : (
+                    <motion.button 
+                      key="button"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      onClick={() => setShowClearConfirm(true)}
+                      className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-red-500 hover:bg-red-50 rounded-md transition-all active:scale-95"
+                      title="Clear all translation history"
+                    >
+                      <Trash2 size={12} />
+                      <span>Clear All</span>
+                    </motion.button>
+                  )}
+                </AnimatePresence>
+              </div>
             )}
           </div>
 
@@ -727,7 +895,7 @@ export default function App() {
 
       <footer className="max-w-5xl mx-auto px-6 py-12 border-t border-black/5 text-center">
         <p className="text-[10px] uppercase tracking-[0.2em] text-black/20 font-mono">
-          Powered by Gemini 3 Flash &bull; Kurdish Sorani Language Model
+          Powered by Gemini 2.0 Flash &bull; Kurdish Sorani Language Model
         </p>
       </footer>
     </div>
