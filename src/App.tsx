@@ -54,30 +54,18 @@ export default function App() {
   const [mode, setMode] = useState<TranslationMode>(TranslationMode.TRANSLATE);
   const [targetLanguage, setTargetLanguage] = useState<Language>(Language.SORANI);
   
-  // Voice Recognition Section State
-  const [voiceLanguage, setVoiceLanguage] = useState<Language>(Language.SORANI);
-  const [voiceParts, setVoiceParts] = useState<any[]>([]);
-  const [currentPartIndex, setCurrentPartIndex] = useState(0);
-  const [showConfirmNext, setShowConfirmNext] = useState(false);
-  
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [history, setHistory] = useState<TranslationResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isOCRing, setIsOCRing] = useState(false);
-  const [isScreenCapturing, setIsScreenCapturing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [manualKeyInput, setManualKeyInput] = useState("");
   const [isEditingOutput, setIsEditingOutput] = useState(false);
   const [editedOutput, setEditedOutput] = useState("");
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
-  const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -120,142 +108,9 @@ export default function App() {
     };
   }, []);
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      const chunks: Blob[] = [];
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
 
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: "audio/wav" });
-        await handleTranscription(audioBlob);
-        // Stop all tracks to release the microphone
-        stream.getTracks().forEach(track => track.stop());
-      };
 
-      setMediaRecorder(recorder);
-      setAudioChunks(chunks);
-      recorder.start();
-      setIsRecording(true);
-      setError(null);
-    } catch (err: any) {
-      setError("Could not access microphone. Please check your permissions.");
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorder && isRecording) {
-      mediaRecorder.stop();
-      setIsRecording(false);
-    }
-  };
-
-  const handleTranscription = async (blob: Blob | File) => {
-    setIsTranscribing(true);
-    setError(null);
-    try {
-      let base64Audio;
-      if (blob instanceof File) {
-         // This needs proper implementation for file reading. 
-         // For now, simplify and just handle as blob/file
-         const reader = new FileReader();
-         const dataUrl = await new Promise<string>((resolve) => {
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(blob);
-         });
-         base64Audio = dataUrl.split(",")[1];
-      } else {
-        const reader = new FileReader();
-        const dataUrl = await new Promise<string>((resolve) => {
-           reader.onloadend = () => resolve(reader.result as string);
-           reader.readAsDataURL(blob);
-        });
-        base64Audio = dataUrl.split(",")[1];
-      }
-      
-      const text = await transcribeAudio(base64Audio, blob.type);
-      if (text) {
-        setInputText(prev => prev ? `${prev}\n${text}` : text);
-      }
-      
-      // If we have parts, mark current as processed and show confirm for next
-      if (voiceParts.length > 0 && currentPartIndex < voiceParts.length - 1) {
-        setVoiceParts(prev => prev.map((p, i) => i === currentPartIndex ? {...p, processed: true} : p));
-        setShowConfirmNext(true);
-      } else {
-         setVoiceParts([]);
-      }
-    } catch (err: any) {
-      setError("Transcription failed. Please try again.");
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
-
-  const checkMediaDuration = (file: File): Promise<number> => {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const media = file.type.startsWith("audio/") ? new Audio(url) : document.createElement("video");
-      media.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        resolve(media.duration);
-      };
-      media.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject();
-      };
-    });
-  };
-
-  const handleFileUpload = async (e: any) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.type.startsWith("image/")) {
-      await handleOCR(file);
-    } else if (file.type.startsWith("audio/") || file.type.startsWith("video/")) {
-      try {
-        const duration = await checkMediaDuration(file);
-        if (duration > 300) {
-           setError("File is longer than 5 minutes. Processing in parts...");
-           // Setup splitting logic
-           setVoiceParts([{file, duration, processed: false}]);
-           // This requires a more complex state, but start with this.
-           await handleTranscription(file); // Keep current logic for now.
-        } else {
-           await handleTranscription(file);
-        }
-      } catch (err) {
-        await handleTranscription(file); // Fallback
-      }
-    } else {
-      setError("Please upload an image, audio, or video file.");
-    }
-  };
-
-  const handleOCR = async (blob: Blob) => {
-    setIsOCRing(true);
-    setError(null);
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = async () => {
-        const base64Image = (reader.result as string).split(",")[1];
-        const text = await performOCR(base64Image, blob.type);
-        if (text) {
-          setInputText(prev => prev ? `${prev}\n${text}` : text);
-        }
-      };
-    } catch (err: any) {
-      setError("OCR failed. Please try again.");
-    } finally {
-      setIsOCRing(false);
-    }
-  };
 
   const handleTranslate = async () => {
     if (!inputText.trim()) return;
@@ -272,64 +127,6 @@ export default function App() {
       setError(err.message || "An error occurred during translation.");
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleScreenCapture = async () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      setError("Screen capture is not supported in this browser or environment. Try opening the app in a new tab.");
-      return;
-    }
-
-    setIsScreenCapturing(true);
-    setError(null);
-    try {
-      const stream = await (navigator.mediaDevices as any).getDisplayMedia({ 
-        video: { cursor: "always" } as any,
-        audio: false 
-      });
-      
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      
-      // Wait for video to be ready
-      await new Promise((resolve) => {
-        video.onloadedmetadata = () => {
-          video.play().then(resolve);
-        };
-      });
-
-      // Give it a tiny bit of time to render the first frame
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      // Stop all tracks immediately
-      stream.getTracks().forEach(track => track.stop());
-
-      const base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-      
-      setIsOCRing(true);
-      const text = await performOCR(base64Image, 'image/jpeg');
-      if (text) {
-        setInputText(prev => prev ? `${prev}\n${text}` : text);
-      }
-    } catch (err: any) {
-      console.error("Screen capture error:", err);
-      if (err.name === 'NotAllowedError') {
-        setError("Permission denied. If you are in the preview window, please click 'Open in new tab' at the top right to enable screen capture.");
-      } else if (window.self !== window.top) {
-        setError("Screen capture is often blocked in previews. Please open the app in a new tab to use this feature.");
-      } else {
-        setError(`Screen capture failed: ${err.message || "Unknown error"}`);
-      }
-    } finally {
-      setIsScreenCapturing(false);
-      setIsOCRing(false);
     }
   };
 
@@ -545,85 +342,11 @@ export default function App() {
                    </button>
                  )}
               </div>
-              {(isTranscribing || isOCRing || isScreenCapturing) && (
-                <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] rounded-2xl flex items-center justify-center z-10">
-                  <div className="flex items-center gap-3 bg-white px-6 py-3 rounded-full shadow-lg border border-black/5">
-                    <Loader2 size={20} className="animate-spin text-black/40" />
-                    <span className="text-sm font-medium text-black/60">
-                      {isScreenCapturing ? "Preparing screen capture..." : 
-                       isOCRing ? "Extracting text from image..." : "Transcribing media..."}
-                    </span>
-                  </div>
-                </div>
-              )}
+
             </div>
           </section>
 
-          {/* New Voice Recognition Section */}
-          <section className="space-y-6 pt-12 border-t border-black/5">
-            <div className="flex justify-between items-center">
-              <h2 className="text-sm font-bold uppercase tracking-widest text-black/60">Voice & Media Recognition</h2>
-              <div className="flex gap-2">
-                {Object.values(Language).map(lang => (
-                  <button 
-                    key={lang}
-                    onClick={() => setVoiceLanguage(lang)}
-                    className={`px-3 py-1 text-[10px] uppercase font-bold rounded-full transition-all ${
-                      voiceLanguage === lang 
-                        ? (lang === Language.ARABIC ? "bg-red-500 text-white" : lang === Language.ENGLISH ? "bg-blue-500 text-white" : "bg-black text-white")
-                        : "bg-black/5 text-black/40"
-                    }`}
-                  >
-                    {lang}
-                  </button>
-                ))}
-              </div>
-            </div>
-            
-            {/* Voice Parts Display */}
-            {voiceParts.length > 0 && (
-              <div className="space-y-2">
-                 <p className="text-xs text-black/50">Processing {voiceParts.length} parts (5 minutes each)</p>
-                 <div className="flex gap-2 overflow-x-auto pb-2">
-                   {voiceParts.map((part, i) => (
-                    <div key={i} className={`px-4 py-2 rounded-xl text-xs font-bold border ${i === currentPartIndex ? 'bg-black text-white' : 'bg-white border-black/5 text-black/40'}`}>
-                      Part {i+1} {part.processed ? '✓' : ''}
-                    </div>
-                   ))}
-                 </div>
-                 {showConfirmNext && (
-                   <div className="bg-amber-50 p-4 rounded-xl flex items-center justify-between border border-amber-100">
-                     <p className="text-sm text-amber-700">Are you sure you want to process the next part?</p>
-                     <div className="flex gap-2">
-                       <button onClick={() => { setShowConfirmNext(false); setVoiceParts([]); }} className="text-xs bg-amber-100 px-3 py-1 rounded-md text-amber-700">Cancel</button>
-                       <button onClick={async () => { setShowConfirmNext(false); await handleTranscription(voiceParts[currentPartIndex + 1].file); setCurrentPartIndex(prev => prev + 1); }} className="text-xs bg-amber-500 text-white px-3 py-1 rounded-md">Continue</button>
-                     </div>
-                   </div>
-                 )}
-              </div>
-            )}
 
-            <div className="flex gap-4">
-              <button 
-                onClick={isRecording ? stopRecording : startRecording}
-                className={`flex-1 flex items-center justify-center gap-2 p-4 rounded-2xl font-bold transition-all ${
-                    isRecording 
-                      ? 'bg-red-500 text-white' 
-                      : (voiceLanguage === Language.ARABIC ? 'bg-red-50 text-red-500' : voiceLanguage === Language.ENGLISH ? 'bg-blue-50 text-blue-500' : 'bg-black/5 text-black/60')
-                }`}
-              >
-                {isRecording ? <><MicOff size={18}/> Stop Recording</> : <><Mic size={18}/> Start Recording</>}
-              </button>
-              <label 
-                className={`flex-1 flex items-center justify-center gap-2 p-4 rounded-2xl font-bold transition-all cursor-pointer ${
-                    voiceLanguage === Language.ARABIC ? 'bg-red-50 text-red-500' : voiceLanguage === Language.ENGLISH ? 'bg-blue-50 text-blue-500' : 'bg-black/5 text-black/60'
-                }`}
-              >
-                <Upload size={18}/> Upload Media
-                <input type="file" accept="audio/*,video/*,image/*" className="hidden" onChange={handleFileUpload} />
-              </label>
-            </div>
-          </section>
           <section className="space-y-4">
             <label className="text-[11px] uppercase tracking-widest text-black/40 font-mono font-bold">Target Language</label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -649,6 +372,7 @@ export default function App() {
               {[
                 { id: TranslationMode.TRANSLATE, label: "Translate", icon: Languages, desc: "Direct translation" },
                 { id: TranslationMode.REFINE, label: "Refine", icon: Sparkles, desc: "Translate & Refine" },
+                { id: TranslationMode.PARAPHRASE, label: "Paraphrase", icon: Edit2, desc: "Translate & Paraphrase" },
                 { id: TranslationMode.SUMMARIZE, label: "Summarize", icon: FileText, desc: "Translate & Summarize" },
               ].map((m) => (
                 <button
@@ -895,7 +619,7 @@ export default function App() {
 
       <footer className="max-w-5xl mx-auto px-6 py-12 border-t border-black/5 text-center">
         <p className="text-[10px] uppercase tracking-[0.2em] text-black/20 font-mono">
-          Powered by Gemini 2.0 Flash &bull; Kurdish Sorani Language Model
+          Powered by Gemini 1.5 Flash &bull; Kurdish Sorani Language Model
         </p>
       </footer>
     </div>

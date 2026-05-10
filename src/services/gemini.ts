@@ -34,6 +34,7 @@ export enum Language {
 export enum TranslationMode {
   TRANSLATE = "translate",
   REFINE = "refine",
+  PARAPHRASE = "paraphrase",
   SUMMARIZE = "summarize",
 }
 
@@ -80,7 +81,7 @@ export async function generateSoraniSpeech(text: string): Promise<string> {
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.0-flash-lite",
       contents: [{ parts: [{ text: `Read this Kurdish Sorani text clearly: ${text}` }] }],
       config: {
         responseModalities: ["AUDIO"],
@@ -114,7 +115,7 @@ export async function performOCR(
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.0-flash-lite",
       contents: [
         {
           inlineData: {
@@ -145,7 +146,7 @@ export async function transcribeAudio(
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.0-flash-lite",
       contents: [
         {
           inlineData: {
@@ -169,7 +170,7 @@ export async function transcribeAudio(
 export async function detectReligiousContent(text: string): Promise<boolean> {
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.0-flash-lite",
       contents: `Analyze the following text. Does it contain religious content like Quranic verses (Ayats) or Hadiths? Answer ONLY with "yes" or "no":\n\n${text}`
     });
     return response.text?.trim().toLowerCase() === "yes";
@@ -202,6 +203,11 @@ export async function translateText(
         ? `Refine the following religious speech for flow and clarity. Keep Arabic Ayats/Hadiths in Arabic:\n\n${text}`
         : `Translate the following text into ${finalLanguage} and then refine it to sound more natural, professional, and idiomatic for a native speaker. Provide ONLY the refined ${finalLanguage} version.\n\n${text}`;
       break;
+    case TranslationMode.PARAPHRASE:
+      prompt = finalLanguage === Language.MIXED
+        ? `Paraphrase the following religious speech, keeping the original meaning and maintaining key Arabic Ayats/Hadiths as they are. Ensure the complete content and all points are retained, just reworded for better clarity/flow:\n\n${text}`
+        : `Translate the following text into ${finalLanguage}, then paraphrase it to present the same information in a different, clearer way while maintaining the original tone AND full length/detail. Do not summarize or shorten it; reword all sentences to be more natural while keeping all original details. Provide ONLY the paraphrased ${finalLanguage} version.\n\n${text}`;
+      break;
     case TranslationMode.SUMMARIZE:
       prompt = finalLanguage === Language.MIXED
         ? `Summarize the following religious speech, keeping key Arabic Ayats/Hadiths as is:\n\n${text}`
@@ -211,7 +217,7 @@ export async function translateText(
 
   try {
     const response = await getAi().models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.0-flash-lite",
       contents: prompt,
       config: {
         systemInstruction: getSystemInstructions(finalLanguage),
